@@ -6,39 +6,35 @@ Role: 你是一位頂尖的「AI 商業攝影導演與提示詞架構師」。
 
 Workflow:
 1. **Pre-production (攝前規劃)**: 使用者透過模塊輸入需求。
-2. **Filming (拍攝執行)**: 當收到 "EXECUTE_FILMING" 指令時，請**立即**根據目前的簡報內容，轉化為詳細的英文 Prompt，並呼叫 \`generate_image\` 工具。**不要**再進行確認或閒聊。
-3. **Post-Production (後製)**: 當使用者對已生成的圖片提出修改要求（如「背景暗一點」、「換個顏色」）時，請使用 \`edit_image\` 或是在對話中確認修圖細節。
-
-Tone & Style: 
-- 拍攝階段：果斷、執行力強，直接回報「Action! 正在為您捕捉畫面...」。
-- 後製階段：專業、細心，如同資深修圖師。
+2. **Filming (拍攝執行)**: 
+   - 當收到 "EXECUTE_FILMING" 且應用場合為「廣告海報」時，請執行「完整提示詞系統生成」。
+   - 你必須生成 10 張系列海報的詳細 Prompt（中英雙語），並附帶排版佈局說明。
+   - 同時，請呼叫 \`generate_image\` 生成「海報 01 - 主 KV」的影像。
+3. **Advertising Poster (廣告海報) 專屬指令**:
+   - **還原要求**: 必須在提示詞中強調「嚴格還原上傳的產品圖細節」，包含包裝、LOGO、材質。
+   - **排版佈局**: 每張海報必須說明中英文排版格式（堆疊、並列或分離）。
+   - **系列完整性**: 包含主 KV、生活場景、概念視覺、細節特寫 (x4)、品牌故事、參數表、使用指南。
+4. **Post-Production (後製)**: 當使用者對已生成的圖片提出修改要求時，請使用工具或對話確認細節。
 `;
 
 const generateImageTool: FunctionDeclaration = {
   name: "generate_image",
-  description: "Generates an image based on the finalized commercial photography prompt.",
+  description: "Generates a high-quality commercial image based on a specific prompt.",
   parameters: {
     type: Type.OBJECT,
     properties: {
-      prompt: {
-        type: Type.STRING,
-        description: "The final, detailed English prompt for image generation.",
-      },
-      aspectRatio: {
-        type: Type.STRING,
-        description: "The aspect ratio for the image (e.g., '1:1', '16:9', '9:16', '4:5', '3:4', '4:3'). Default to '1:1' if unsure.",
-        enum: ["1:1", "16:9", "9:16", "3:4", "4:3"],
+      prompt: { type: Type.STRING, description: "Detailed English prompt for image generation." },
+      aspectRatio: { 
+        type: Type.STRING, 
+        description: "Aspect ratio.",
+        enum: ["1:1", "16:9", "9:16", "3:4", "4:3"]
       },
     },
     required: ["prompt"],
   },
 };
 
-const tools: Tool[] = [
-  {
-    functionDeclarations: [generateImageTool],
-  },
-];
+const tools: Tool[] = [{ functionDeclarations: [generateImageTool] }];
 
 class GeminiService {
   private chatSession: any;
@@ -51,241 +47,88 @@ class GeminiService {
     const ai = this.getAI();
     this.chatSession = ai.chats.create({
       model: "gemini-3-flash-preview",
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        tools: tools,
-        temperature: 0.7,
-      },
+      config: { systemInstruction: SYSTEM_INSTRUCTION, tools: tools, temperature: 0.7 },
     });
     return this.chatSession;
   }
 
   async sendMessage(message: string, images?: string[]) {
-    if (!this.chatSession) {
-      this.startChat();
-    }
-
+    if (!this.chatSession) this.startChat();
     const parts: any[] = [];
-    
     if (images && images.length > 0) {
         images.forEach(img => {
-            // Strip prefix if present
             const base64Data = img.split(',')[1] || img;
-            parts.push({
-                inlineData: {
-                    mimeType: 'image/jpeg',
-                    data: base64Data
-                }
-            });
+            parts.push({ inlineData: { mimeType: 'image/jpeg', data: base64Data } });
         });
     }
-    
     parts.push({ text: message });
-
-    const result = await this.chatSession.sendMessage({
-      message: parts
-    });
-
-    return result;
+    return await this.chatSession.sendMessage({ message: parts });
   }
 
-  // New method to generate a human-readable brief in Chinese
   async summarizeBrief(scenario: string, activeModules: ModuleData[]): Promise<string> {
     try {
         const ai = this.getAI();
         let promptText = `Context: 商業攝影專案「${scenario}」。\n`;
-        
+        const hasImage = activeModules.find(m => m.id === 'subject')?.imageValue;
+
         activeModules.forEach(m => {
-             if (m.textValue || (m.type === 'slider' && m.options)) {
-                 let val = m.textValue;
-                 if (m.type === 'slider' && m.options && m.sliderValue !== undefined) {
-                     val = m.options[m.sliderValue];
-                     // Add extra info for slider types
-                     if (m.id === 'consistency') {
-                         if (m.sliderValue === 0 && m.inspirationSelection) val += ` (提取: ${m.inspirationSelection.join(', ')})`;
-                         if (m.sliderValue === 1 && m.timeShiftValue) val += ` (時間: ${m.timeShiftValue}年)`;
-                         if (m.sliderValue === 2 && m.tweakDescription) val += ` (微調: ${m.tweakDescription})`;
-                     }
-                 }
-                 promptText += `【${m.label}】: ${val}\n`;
-             }
+            let val = m.textValue;
+            if (m.type === 'slider' && m.options && m.sliderValue !== undefined) val = m.options[m.sliderValue];
+            if (val || m.imageValue) promptText += `【${m.label}】: ${val || (m.imageValue ? "[已上傳圖片]" : "")}\n`;
         });
 
-        promptText += `\nTask: 請將上述模塊資訊彙整為一段流暢、專業的「攝前計畫書 (Production Brief)」。\nRequirement: 使用繁體中文，語氣專業，約 100-150 字。強調視覺風格、光影配置與核心主體。不要條列式，要寫成一段敘述。`;
+        if (scenario === '廣告海報' && hasImage) {
+            promptText += `\nTask: 請先進行「產品信息智能提取」，並以此為基礎撰寫完整的「攝前計畫確認報告」。報告應包含：品牌名稱、產品類型、賣點、配色方案、視覺風格建議、中英文排版建議。請使用繁體中文，格式需包含【識別報告】。`;
+        } else {
+            promptText += `\nTask: 請彙整為一段流暢專業的「攝前計畫書」。繁體中文，語氣專業。`;
+        }
 
+        // Fixed: Wrapped parts in a content object to follow the latest API specification
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
-            contents: promptText,
+            contents: hasImage ? {
+                parts: [
+                    { inlineData: { mimeType: 'image/jpeg', data: hasImage.split(',')[1] } },
+                    { text: promptText }
+                ]
+            } : promptText,
         });
 
         return response.text?.trim() || "";
     } catch (error) {
-        console.error("Summarize brief failed:", error);
-        return "無法產生計畫書摘要，請直接檢視下方模塊設定。";
+        console.error(error);
+        return "無法產生摘要。";
     }
   }
 
   async generateModuleSuggestion(scenario: string, moduleLabel: string, currentText: string, allModules: ModuleData[]): Promise<string> {
-    try {
-        const ai = this.getAI();
-        
-        // Construct Context string from other modules
-        const contextStr = allModules
-            .filter(m => m.label !== moduleLabel && (m.textValue || m.sliderValue !== undefined))
-            .map(m => {
-                let val = m.textValue;
-                if(m.type === 'slider' && m.options && m.sliderValue !== undefined) {
-                    val = m.options[m.sliderValue];
-                }
-                return `${m.label}: ${val}`;
-            })
-            .join('; ');
-
-        const prompt = `
-Context: 您是專業商業攝影導演。我們正在進行「${scenario}」的拍攝規劃。
-Current Brief Context: ${contextStr || "尚未設定其他參數"}。
-Task: 請為「${moduleLabel}」模塊提供建議。
-User Input: "${currentText}" (若是空的，請根據 Context 提供最適合的創意填空)。
-Requirement: 
-1. **必須**參考上述 Context（例如：如果 Context 是漢堡，光影建議應強調食慾與質感）。
-2. 輸出**僅限**建議的內容本身，不要有解釋或引言。
-3. 使用繁體中文，並夾雜專業攝影術語。
-4. 長度控制在 50 字以內，精簡有力。
-        `;
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: prompt,
-        });
-
-        return response.text?.trim() || "";
-    } catch (error) {
-        console.error("Suggestion generation failed:", error);
-        return "";
-    }
+    const ai = this.getAI();
+    const prompt = `Context: 商業攝影導演。場景「${scenario}」。Task: 為「${moduleLabel}」模塊提供 50 字內繁體中文專業建議。Input: "${currentText}"。`;
+    const response = await ai.models.generateContent({ model: 'gemini-3-flash-preview', contents: prompt });
+    return response.text?.trim() || "";
   }
 
   async analyzeImageForModule(base64Image: string, moduleLabel: string, scenario: string): Promise<string> {
-    try {
-        const ai = this.getAI();
-        const base64Data = base64Image.split(',')[1] || base64Image;
-
-        const prompt = `
-Role: Computer Vision & Commercial Photography Expert.
-Task: Analyze the attached reference image specifically for the module: "【${moduleLabel}】" in the context of "${scenario}".
-Action: Extract ONLY the visual elements relevant to ${moduleLabel}. Ignore everything else.
-
-Examples:
-- If Module is "Lighting": Extract hard/soft light, direction (backlight/rembrandt), color temperature, contrast ratio. Ignore the subject face or clothes.
-- If Module is "Composition": Extract angle (low/high), shot size (close-up/full body), framing.
-- If Module is "Clothing": Extract fabric material, style, cut, patterns.
-- If Module is "Environment": Extract background elements, location vibe, props.
-
-Output Requirement:
-- Return a concise, descriptive paragraph in Traditional Chinese.
-- Focus on adjectives and technical terms.
-- Do NOT say "The image shows...", just describe the elements directly (e.g., "高對比的側面硬光，帶有藍色調的邊緣光...").
-        `;
-
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
-            contents: {
-                parts: [
-                    { inlineData: { mimeType: 'image/jpeg', data: base64Data } },
-                    { text: prompt }
-                ]
-            }
-        });
-
-        return response.text?.trim() || "";
-
-    } catch (error) {
-        console.error("Image analysis failed:", error);
-        return "";
-    }
+    const ai = this.getAI();
+    const prompt = `Analyze specifically for "【${moduleLabel}】" in context of "${scenario}". Return concise descriptive paragraph in Traditional Chinese. Focus on technical terms.`;
+    const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: base64Image.split(',')[1] } }, { text: prompt }] }
+    });
+    return response.text?.trim() || "";
   }
 
   async generateActualImage(prompt: string, aspectRatio: string): Promise<string> {
-    try {
-      const ai = this.getAI();
-      let validRatio = aspectRatio;
-      if (aspectRatio === '4:5') validRatio = '3:4'; 
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-image-preview',
-        contents: {
-          parts: [{ text: prompt }],
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: validRatio as any,
-            imageSize: "1K"
-          }
-        },
-      });
-
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) {
-            return `data:image/png;base64,${part.inlineData.data}`;
-        }
-      }
-      throw new Error("無法生成影像。");
-
-    } catch (error) {
-      console.error("Image generation failed:", error);
-      throw error;
+    const ai = this.getAI();
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-image-preview',
+      contents: { parts: [{ text: prompt }] },
+      config: { imageConfig: { aspectRatio: aspectRatio as any, imageSize: "1K" } },
+    });
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
     }
-  }
-
-  async editImage(base64Image: string, instruction: string): Promise<{ imageUrl: string, prompt: string }> {
-    try {
-      const ai = this.getAI();
-      const base64Data = base64Image.split(',')[1] || base64Image;
-      
-      // Use Pro model for high quality editing
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-image-preview',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType: 'image/png', // Assume PNG for generated output
-                data: base64Data,
-              },
-            },
-            {
-              text: instruction,
-            },
-          ],
-        },
-        config: {
-            imageConfig: {
-                imageSize: "1K" // Maintain quality
-            }
-        }
-      });
-
-      let imageUrl = '';
-      let textResponse = '';
-
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) {
-            imageUrl = `data:image/png;base64,${part.inlineData.data}`;
-        } else if (part.text) {
-            textResponse += part.text;
-        }
-      }
-
-      if (!imageUrl) {
-        throw new Error("編輯失敗：未能生成圖像。");
-      }
-
-      return { imageUrl, prompt: textResponse || instruction };
-
-    } catch (error) {
-      console.error("Image edit failed:", error);
-      throw error;
-    }
+    throw new Error("影像生成失敗");
   }
 }
 
